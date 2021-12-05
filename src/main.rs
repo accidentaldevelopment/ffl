@@ -48,7 +48,9 @@ impl AsyncStockSignal for PriceDifference {
     type SignalType = (f64, f64);
 
     ///
-    /// Calculates the absolute and relative difference between the beginning and ending of an f64 series. The relative difference is relative to the beginning.
+    /// Calculates the absolute and relative difference between the beginning
+    /// and ending of an f64 series. The relative difference is relative to the
+    /// beginning.
     ///
     /// # Returns
     ///
@@ -122,7 +124,7 @@ impl AsyncStockSignal for WindowedSMA {
 /// Retrieve data from a data source and extract the closing prices. Errors
 /// during download are mapped onto `io::Errors` as `InvalidData`.
 ///
-fn fetch_closing_data(
+async fn fetch_closing_data(
     symbol: &str,
     beginning: &DateTime<Utc>,
     end: &DateTime<Utc>,
@@ -131,6 +133,7 @@ fn fetch_closing_data(
 
     let response = provider
         .get_quote_history(symbol, *beginning, *end)
+        .await
         .map_err(|_| Error::from(ErrorKind::InvalidData))?;
     let mut quotes = response
         .quotes()
@@ -143,7 +146,8 @@ fn fetch_closing_data(
     }
 }
 
-fn main() -> std::io::Result<()> {
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
     let opts = Opts::parse();
     let from: DateTime<Utc> = opts.from.parse().expect("Couldn't parse 'from' date");
     let to = Utc::now();
@@ -151,7 +155,7 @@ fn main() -> std::io::Result<()> {
     // a simple way to output a CSV header
     println!("period start,symbol,price,change %,min,max,30d avg");
     for symbol in opts.symbols.split(',') {
-        let closes = fetch_closing_data(symbol, &from, &to)?;
+        let closes = fetch_closing_data(symbol, &from, &to).await?;
         if !closes.is_empty() {
             // min/max of the period. unwrap() because those are Option types
             let period_max: f64 = MaxPrice.calculate(&closes).unwrap();
