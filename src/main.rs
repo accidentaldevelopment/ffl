@@ -1,4 +1,4 @@
-#![deny(rust_2018_idioms)]
+#![deny(clippy::all, clippy::pedantic, rust_2018_idioms)]
 
 use chrono::prelude::*;
 use clap::Parser;
@@ -55,16 +55,15 @@ impl AsyncStockSignal for PriceDifference {
     /// A tuple `(absolute, relative)` difference.
     ///
     fn calculate(&self, series: &[f64]) -> Option<Self::SignalType> {
-        if !series.is_empty() {
-            // unwrap is safe here even if first == last
-            let (first, last) = (series.first().unwrap(), series.last().unwrap());
-            let abs_diff = last - first;
-            let first = if *first == 0.0 { 1.0 } else { *first };
-            let rel_diff = abs_diff / first;
-            Some((abs_diff, rel_diff))
-        } else {
-            None
+        if series.is_empty() {
+            return None;
         }
+        // unwrap is safe here even if first == last
+        let (first, last) = (series.first().unwrap(), series.last().unwrap());
+        let abs_diff = last - first;
+        let first = if *first == 0.0 { 1.0 } else { *first };
+        let rel_diff = abs_diff / first;
+        Some((abs_diff, rel_diff))
     }
 }
 
@@ -106,6 +105,7 @@ impl AsyncStockSignal for WindowedSMA {
     ///
     fn calculate(&self, series: &[f64]) -> Option<Self::SignalType> {
         if !series.is_empty() && self.window_size > 1 {
+            #[allow(clippy::cast_precision_loss)]
             Some(
                 series
                     .windows(self.window_size)
@@ -119,7 +119,8 @@ impl AsyncStockSignal for WindowedSMA {
 }
 
 ///
-/// Retrieve data from a data source and extract the closing prices. Errors during download are mapped onto io::Errors as InvalidData.
+/// Retrieve data from a data source and extract the closing prices. Errors
+/// during download are mapped onto `io::Errors` as `InvalidData`.
 ///
 fn fetch_closing_data(
     symbol: &str,
@@ -134,11 +135,11 @@ fn fetch_closing_data(
     let mut quotes = response
         .quotes()
         .map_err(|_| Error::from(ErrorKind::InvalidData))?;
-    if !quotes.is_empty() {
+    if quotes.is_empty() {
+        Ok(vec![])
+    } else {
         quotes.sort_by_cached_key(|k| k.timestamp);
         Ok(quotes.iter().map(|q| q.adjclose as f64).collect())
-    } else {
-        Ok(vec![])
     }
 }
 
@@ -237,7 +238,7 @@ mod tests {
         let signal = WindowedSMA { window_size: 3 };
         assert_eq!(
             signal.calculate(&series),
-            Some(vec![3.9333333333333336, 5.433333333333334, 5.5])
+            Some(vec![3.933_333_333_333_333_6, 5.433_333_333_333_334, 5.5])
         );
 
         let signal = WindowedSMA { window_size: 5 };
