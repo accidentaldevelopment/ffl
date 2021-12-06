@@ -2,7 +2,11 @@
 
 use chrono::prelude::*;
 use clap::Parser;
-use std::io::{Error, ErrorKind};
+use std::{
+    io::{self, Error, ErrorKind},
+    time::Duration,
+};
+use tokio::time::MissedTickBehavior;
 use yahoo_finance_api as yahoo;
 
 #[derive(Parser)]
@@ -146,6 +150,56 @@ async fn fetch_closing_data(
     }
 }
 
+async fn run_symbols_report(
+    symbols: Vec<String>,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> io::Result<()> {
+    let tasks = symbols.into_iter().map(|symbol| {
+        tokio::spawn(async move {
+            let closes = fetch_closing_data(&symbol, &from, &to).await?;
+            process_closing_data(&symbol, &closes, &from);
+            Ok(()) as io::Result<()>
+        })
+    });
+    for result in futures_util::future::join_all(tasks).await {
+        match result {
+            Ok(report) => {
+                if let Err(err) = report {
+                    return Err(err);
+                }
+            }
+            Err(err) => eprintln!("{:?}", err),
+        }
+    }
+    Ok(())
+}
+
+fn process_closing_data(symbol: &str, closes: &[f64], from: &DateTime<Utc>) {
+    if !closes.is_empty() {
+        // min/max of the period. unwrap() because those are Option types
+        let period_max: f64 = MaxPrice.calculate(closes).unwrap();
+        let period_min: f64 = MinPrice.calculate(closes).unwrap();
+        let last_price = *closes.last().unwrap_or(&0.0);
+        let (_, pct_change) = PriceDifference.calculate(closes).unwrap_or((0.0, 0.0));
+        let sma = WindowedSMA { window_size: 30 }
+            .calculate(closes)
+            .unwrap_or_default();
+
+        // a simple way to output CSV data
+        println!(
+            "{},{},${:.2},{:.2}%,${:.2},${:.2},${:.2}",
+            from.to_rfc3339(),
+            symbol,
+            last_price,
+            pct_change * 100.0,
+            period_min,
+            period_max,
+            sma.last().unwrap_or(&0.0)
+        );
+    }
+}
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let opts = Opts::parse();
@@ -154,32 +208,14 @@ async fn main() -> std::io::Result<()> {
 
     // a simple way to output a CSV header
     println!("period start,symbol,price,change %,min,max,30d avg");
-    for symbol in opts.symbols.split(',') {
-        let closes = fetch_closing_data(symbol, &from, &to).await?;
-        if !closes.is_empty() {
-            // min/max of the period. unwrap() because those are Option types
-            let period_max: f64 = MaxPrice.calculate(&closes).unwrap();
-            let period_min: f64 = MinPrice.calculate(&closes).unwrap();
-            let last_price = *closes.last().unwrap_or(&0.0);
-            let (_, pct_change) = PriceDifference.calculate(&closes).unwrap_or((0.0, 0.0));
-            let sma = WindowedSMA { window_size: 30 }
-                .calculate(&closes)
-                .unwrap_or_default();
-
-            // a simple way to output CSV data
-            println!(
-                "{},{},${:.2},{:.2}%,${:.2},${:.2},${:.2}",
-                from.to_rfc3339(),
-                symbol,
-                last_price,
-                pct_change * 100.0,
-                period_min,
-                period_max,
-                sma.last().unwrap_or(&0.0)
-            );
-        }
+    let mut interval = tokio::time::interval(Duration::from_secs(30));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let symbols: Vec<_> = opts.symbols.split(',').map(ToString::to_string).collect();
+    loop {
+        interval.tick().await;
+        run_symbols_report(symbols.clone(), from, to).await?;
     }
-    Ok(())
+    // Ok(())
 }
 
 #[cfg(test)]
